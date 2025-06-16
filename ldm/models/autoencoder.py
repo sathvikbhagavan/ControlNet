@@ -8,6 +8,7 @@ from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 
 from ldm.util import instantiate_from_config
 from ldm.modules.ema import LitEma
+import torch.nn as nn
 
 
 class AutoencoderKL(pl.LightningModule):
@@ -90,7 +91,7 @@ class AutoencoderKL(pl.LightningModule):
         dec = self.decoder(z)
         return dec
 
-    def forward(self, input, sample_posterior=True):
+    def forward(self, input, sample_posterior=False):
         posterior = self.encode(input)
         if sample_posterior:
             z = posterior.sample()
@@ -196,6 +197,167 @@ class AutoencoderKL(pl.LightningModule):
         x = F.conv2d(x, weight=self.colorize)
         x = 2.*(x-x.min())/(x.max()-x.min()) - 1.
         return x
+
+# class AutoencoderKL(pl.LightningModule):
+#     def __init__(self,
+#                  ddconfig,               # same dict you pass to Encoder/Decoder
+#                  lossconfig=None,        # no longer used (you’ll replace with L1/LPIPS/…)
+#                  embed_dim=32,           # dimensionality of each codebook vector (D)
+#                  codebook_size=1024,      # number of codes K
+#                  commitment_cost=0.25,   # β in the VQ‐VAE commit loss
+#                  ckpt_path=None,
+#                  ignore_keys=[],
+#                  image_key="image",
+#                  colorize_nlabels=None,
+#                  monitor=None,
+#                  ema_decay=None,
+#                  learn_logvar=False      # not used, but kept for compatibility
+#                  ):
+#         super().__init__()
+#         # We ignore learn_logvar and lossconfig in VQ‐VAE
+#         self.image_key      = image_key
+#         self.embed_dim      = embed_dim
+#         self.codebook_size = codebook_size
+#         self.commitment_cost = commitment_cost
+
+#         # ——— Encoder & Decoder (same as before, except we drop double_z) ———
+#         # Make a copy of ddconfig but force double_z=False, and z_channels=embed_dim
+#         dd = dict(ddconfig)
+#         dd["double_z"]   = False
+#         dd["z_channels"] = embed_dim
+
+#         self.encoder = Encoder(**dd)   # outputs [B, embed_dim, Hbot, Wbot]
+#         self.decoder = Decoder(**dd)   # expects input [B, embed_dim, Hbot, Wbot]
+
+#         # ——— Codebook: K embeddings of dimension D=embed_dim ———
+#         self.codebook = nn.Embedding(self.codebook_size, self.embed_dim)
+#         nn.init.uniform_(self.codebook.weight, -1.0, 1.0)
+
+#         if ckpt_path is not None:
+#             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
+
+#         if colorize_nlabels is not None:
+#             assert isinstance(colorize_nlabels, int)
+#             self.register_buffer("colorize", torch.randn(3, colorize_nlabels, 1, 1))
+
+#         self.monitor = monitor
+
+#     def init_from_ckpt(self, path, ignore_keys=list()):
+#         """
+#         Load matching weights from an old Gaussian‐VAE checkpoint (.pt or .pth),
+#         while skipping any layers that no longer exist (quant_conv, post_quant_conv,
+#         and codebook), and skipping any size‐mismatched layers.
+#         """
+#         ckpt = torch.load(path, map_location="cpu")
+#         # sd_old = {k.replace('first_stage_model.', ''): v for k, v in ckpt.items() if 'first_stage_model' in k}
+#         sd_old = ckpt
+
+#         sd_new = {}
+#         own_state = self.state_dict()
+#         for k_old, v_old in sd_old.items():
+#             # 1) Skip any keys the user specifically asked to ignore:
+#             if any(k_old.startswith(ik) for ik in ignore_keys):
+#                 continue
+
+#             # 2) Skip any layers that no longer exist in VQ‐VAE:
+#             #    - quant_conv, post_quant_conv do not exist anymore
+#             if k_old.startswith("quant_conv") or k_old.startswith("post_quant_conv"):
+#                 continue
+
+#             # 3) Only copy over if the key also exists in our new model’s state_dict
+#             if k_old in own_state:
+#                 v_new = own_state[k_old]
+#                 # 4) Copy only if shapes match exactly
+#                 if v_old.shape == v_new.shape:
+#                     sd_new[k_old] = v_old.clone()
+#                 else:
+#                     # shape mismatch: skip it
+#                     print(f"Skipping '{k_old}' (shape {v_old.shape} → {v_new.shape})")
+#             else:
+#                 # key not found in our new model
+#                 # (for example, old VAE might have logged some extra buffers)
+#                 continue
+
+#         # Finally load the filtered subset:
+#         self.load_state_dict(sd_new, strict=False)
+#         print(f"Loaded {len(sd_new)}/{len(own_state)} matching keys from {path}")
+
+#     def encode(self, x):
+#         """
+#         Encode x → continuous “pre-quantized” embeddings e ∈ ℝ^{B×D×Hbot×Wbot}.
+#         """
+#         return self.encoder(x)  # [B, embed_dim, Hbot, Wbot]
+
+#     def quantize(self, e):
+#         """
+#         Given e ∈ [B, D, H, W], flatten to [N, D], pick nearest codebook vector per location,
+#         then return:
+#         - z_q: quantized latents with a straight-through path back to e (shape [B, D, H, W])
+#         - vq_loss = embed_loss + commit_loss
+#         """
+
+#         B, D, H, W = e.shape
+#         # ——— flatten e to [N, D] ———
+#         e_flat = e.permute(0, 2, 3, 1).contiguous().view(-1, D)  # [N, D], where N = B*H*W
+
+#         # ——— compute squared distances to each codebook vector ———
+#         embedding = self.codebook.weight  # [K, D]
+#         # ||e_flat||^2 → [N,1]
+#         e_sq = torch.sum(e_flat**2, dim=1, keepdim=True)        # [N, 1]
+#         # ||embedding||^2 → [1,K]
+#         emb_sq = torch.sum(embedding**2, dim=1, keepdim=True).T  # [1, K]
+#         # dot products → [N, K]
+#         dot = torch.matmul(e_flat, embedding.t())               # [N, K]
+#         # distances → [N, K]
+#         dists = e_sq + emb_sq - 2 * dot                         # [N, K]
+
+#         # ——— get nearest code index for each of the N vectors ———
+#         encoding_inds = torch.argmin(dists, dim=1)              # [N]
+
+#         # ——— look up the codebook vectors → [N, D] ———
+#         e_q = self.codebook(encoding_inds)                      # [N, D]
+
+#         # ——— reshape back to [B, D, H, W] ———
+#         e_q_reshaped = e_q.view(B, H, W, D).permute(0, 3, 1, 2).contiguous()
+
+#         # ——— compute VQ losses ———
+#         e_q_det = e_q_reshaped.detach()
+#         e_det   = e.detach()
+
+#         # push codebook vectors toward encoder output (embedding loss)
+#         embed_loss  = torch.mean((e_q_det - e)**2)
+
+#         # push encoder output toward chosen code (commitment loss)
+#         commit_loss = self.commitment_cost * torch.mean((e - e_q_det)**2)
+
+#         vq_loss = embed_loss + commit_loss
+
+#         # ——— straight‐through “z_q” for the decoder ———
+#         # Forward: z_q == e_q_reshaped
+#         # Backward: grads flow into “e”
+#         z_q = e + (e_q_reshaped - e).detach()
+
+#         return z_q, vq_loss
+
+#     def decode(self, z_q):
+#         """
+#         Decode the quantized latent z_q ∈ [B, D, Hbot, Wbot] → reconstructed image.
+#         """
+#         return self.decoder(z_q)
+
+#     def forward(self, x):
+#         """
+#         Full VQ-VAE forward:
+#           x → Encoder → e → Quantize → z_q → Decoder → x_recon
+#         Returns: x_recon, vq_loss
+#         """
+#         # 1) encode → e
+#         e = self.encode(x)                        # [B, D, Hbot, Wbot]
+#         # 2) quantize e → z_q, compute vq_loss
+#         z_q, _ = self.quantize(e)           # z_q same shape, [B, D, Hbot, Wbot]
+#         # 3) decode z_q → x_recon
+#         x_recon = self.decode(z_q)                # [B, C, H, W]
+#         return x_recon, z_q
 
 
 class IdentityFirstStage(torch.nn.Module):

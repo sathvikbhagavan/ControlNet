@@ -654,7 +654,7 @@ class LatentDiffusion(DDPM):
 
     def get_first_stage_encoding(self, encoder_posterior):
         if isinstance(encoder_posterior, DiagonalGaussianDistribution):
-            z = encoder_posterior.sample()
+            z = encoder_posterior.mean
         elif isinstance(encoder_posterior, torch.Tensor):
             z = encoder_posterior
         else:
@@ -816,7 +816,7 @@ class LatentDiffusion(DDPM):
             out.append(xc)
         return out
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def decode_first_stage(self, z, predict_cids=False, force_not_quantize=False):
         if predict_cids:
             if z.dim() == 4:
@@ -829,6 +829,8 @@ class LatentDiffusion(DDPM):
 
     @torch.no_grad()
     def encode_first_stage(self, x):
+        # z, _ = self.first_stage_model.quantize(self.first_stage_model.encode(x))
+        # return z
         return self.first_stage_model.encode(x)
 
     def shared_step(self, batch, **kwargs):
@@ -917,11 +919,24 @@ class LatentDiffusion(DDPM):
         loss += (self.original_elbo_weight * loss_vlb)
         # Update loss to include reconstruction loss
         if x_true is not None:
-            recons = rearrange(self.decode_first_stage(model_output), 'b c h w -> b h w c')
-            reconstruction_loss = torch.nn.functional.mse_loss(x_true, recons)
+            sqrt_alpha_cumprod_t = extract_into_tensor(self.sqrt_alphas_cumprod, t, x_noisy.shape)
+            sqrt_one_minus_alpha_cumprod_t = extract_into_tensor(
+                self.sqrt_one_minus_alphas_cumprod, t, x_noisy.shape
+            )
+            pred_x0 = (
+                x_noisy - sqrt_one_minus_alpha_cumprod_t * model_output
+            ) / sqrt_alpha_cumprod_t
+            recons = rearrange(self.decode_first_stage(pred_x0), 'b c h w -> b h w c')
+            channel_weights = torch.tensor([1.0, 1.0, 5.0], device=recons.device)
+            squared_error = (x_true - recons) ** 2
+            per_channel_mse = squared_error.mean(dim=(0, 1, 2))
+            reconstruction_loss = (per_channel_mse * channel_weights).sum()
             loss += reconstruction_loss
             loss_dict.update({f'{prefix}/loss_reconstruction': reconstruction_loss})
         loss_dict.update({f'{prefix}/loss': loss})
+
+        for k, v in loss_dict.items():
+            self.log(k, v, prog_bar=True, on_step=True, on_epoch=True)
 
         return loss, loss_dict
 

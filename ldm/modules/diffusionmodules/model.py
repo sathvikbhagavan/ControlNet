@@ -2,6 +2,7 @@
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from einops import rearrange
 from typing import Optional, Any
@@ -37,9 +38,17 @@ def get_timestep_embedding(timesteps, embedding_dim):
         emb = torch.nn.functional.pad(emb, (0,1,0,0))
     return emb
 
+# def swish(x):
+#     return x * torch.sigmoid(x)
 
 def nonlinearity(x):
     # swish
+    # _, _, H, W = x.shape
+    # print('In the nonlinearity function')
+    # x_up = F.interpolate(x, size=(2 * H, 2 * W), mode="bicubic", align_corners=True, antialias=True)
+    # x_act = swish(x_up)
+    # x_down = F.interpolate(x_act, size=(H, W), mode="bicubic", align_corners=True, antialias=True)
+    # return x_down
     return x*torch.sigmoid(x)
 
 

@@ -2,6 +2,7 @@ import einops
 import torch
 import torch as th
 import torch.nn as nn
+from torch.optim.lr_scheduler import LambdaLR
 
 from ldm.modules.diffusionmodules.util import (
     conv_nd,
@@ -416,11 +417,23 @@ class ControlLDM(LatentDiffusion):
     def configure_optimizers(self):
         lr = self.learning_rate
         params = list(self.control_model.parameters())
+        def lr_lambda(epoch):
+            return 1.0 if epoch < 750 else 0.2
         if not self.sd_locked:
             params += list(self.model.diffusion_model.output_blocks.parameters())
             params += list(self.model.diffusion_model.out.parameters())
         opt = torch.optim.AdamW(params, lr=lr)
-        return opt
+        scheduler = LambdaLR(opt, lr_lambda=lr_lambda)
+        return {
+            "optimizer": opt,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "epoch",
+                "frequency": 1,
+                "name": "lr",
+            }
+        }
+        # return opt
 
     def low_vram_shift(self, is_diffusing):
         if is_diffusing:

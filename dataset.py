@@ -8,9 +8,9 @@ from einops import rearrange
 
 
 class MyDataset(Dataset):
-    def __init__(self):
-        self.X = np.load("/home/bhagavan/SemesterProject/LDC_NS_2D/128x128/harmonics_lid_driven_cavity_X_train.npy")
-        self.Y = np.load("/home/bhagavan/SemesterProject/LDC_NS_2D/128x128/harmonics_lid_driven_cavity_Y_train.npy")
+    def __init__(self, train_or_test='train', res=128, dataset_name='harmonics'):
+        self.X = np.load(f"/work/cvlab/students/bhagavan/SemesterProject/LDC_NS_2D/{res}x{res}/processed/{dataset_name}_lid_driven_cavity_X_{train_or_test}.npy")
+        self.Y = np.load(f"/work/cvlab/students/bhagavan/SemesterProject/LDC_NS_2D/{res}x{res}/processed/{dataset_name}_lid_driven_cavity_Y_{train_or_test}.npy")
 
     def __len__(self):
         return self.X.shape[0]
