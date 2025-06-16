@@ -2,9 +2,15 @@
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from einops import rearrange
 from typing import Optional, Any
+from .CNOModule import (
+    CNOBlock,
+    LiftProjectBlock,
+    ResidualBlock,
+)
 
 from ldm.modules.attention import MemoryEfficientCrossAttention
 
@@ -37,6 +43,25 @@ def get_timestep_embedding(timesteps, embedding_dim):
         emb = torch.nn.functional.pad(emb, (0,1,0,0))
     return emb
 
+
+# def nonlinearity(x):
+#     # swish
+#     _, _, H, W = x.shape
+
+#     # Upsample to 2x spatial size
+#     x = F.interpolate(x, size=(2 * H, 2 * W), mode='bicubic', antialias=True)
+
+#     # Apply Swish activation (x * sigmoid(x))
+#     # x = x * torch.sigmoid(x)
+#     x = F.leaky_relu(x, negative_slope=0.2)
+
+#     # Downsample back to original size
+#     x = F.interpolate(x, size=(H, W), mode='bicubic', antialias=True)
+
+#     # Resample to same size again (this replicates original behavior)
+#     x = F.interpolate(x, size=(H, W), mode='bicubic', antialias=True)
+
+#     return x
 
 def nonlinearity(x):
     # swish
@@ -651,6 +676,439 @@ class Decoder(nn.Module):
             h = torch.tanh(h)
         return h
 
+# class Encoder(nn.Module):
+#     def __init__(self,
+#                  *,
+#                  in_channels,        # e.g. 1 or 3 for physics fields
+#                  ch,            # “ch” in the original VAE (e.g. 64)
+#                  ch_mult=(1, 2, 4, 8),
+#                  num_res_blocks=2,
+#                  attn_resolutions=(16, 8),  # just example
+#                  dropout=0.0,
+#                  resolution=128,     # e.g. 128×128 → 64 → 32 → 16
+#                  z_channels=32,
+#                  double_z=True,
+#                  cutoff_den=2.0001,
+#                  filter_size=6,
+#                  half_width_mult=0.8,
+#                  conv_kernel=3,
+#                  activation="cno_lrelu",
+#                  **ignore_kwargs):
+#         super().__init__()
+
+#         self.in_channels = in_channels
+#         self.ch     = ch
+#         self.ch_mult     = ch_mult
+#         self.num_res_blocks = num_res_blocks
+#         self.attn_resolutions = set(attn_resolutions)
+#         self.resolution  = resolution
+#         self.z_channels  = z_channels
+#         self.double_z    = double_z
+#         self.cutoff_den  = cutoff_den
+#         self.filter_size = filter_size
+#         self.half_width_mult = half_width_mult
+#         self.conv_kernel = conv_kernel
+#         self.activation  = activation
+
+#         # Compute the list of resolutions at each downsample step
+#         self.num_resolutions = len(ch_mult)
+#         self.down_resolutions = [
+#             resolution // (2 ** i) for i in range(self.num_resolutions)
+#         ]  # e.g. [128, 64, 32, 16]
+#         # Channel sizes at each resolution
+#         self.ch_in_level  = [ch * m for m in ch_mult]  # [ch×1, ch×2, …]
+
+#         # === (1) Initial “lift” from input → ch (optional filter) ===
+#         self.lift = LiftProjectBlock(
+#             in_channels      = in_channels,
+#             out_channels     = ch * ch_mult[0],
+#             in_size          = self.down_resolutions[0],
+#             out_size         = self.down_resolutions[0],
+#             latent_dim       = ch,       # internal “latent lift” dimension
+#             cutoff_den       = cutoff_den,
+#             conv_kernel      = conv_kernel,
+#             filter_size      = filter_size,
+#             lrelu_upsampling = 2,
+#             half_width_mult  = half_width_mult,
+#             radial           = False,
+#             batch_norm       = False,
+#             activation       = activation
+#         )
+#         curr_channels = ch * ch_mult[0]
+
+#         # === (2) Downsampling path with CNOBlocks & ResidualBlocks ===
+#         self.down_blocks = nn.ModuleList()
+#         for i_level in range(self.num_resolutions):
+#             Ri = self.down_resolutions[i_level]
+#             Rnext = (
+#                 self.down_resolutions[i_level + 1]
+#                 if i_level < self.num_resolutions - 1
+#                 else Ri
+#             )
+#             level_modules = nn.ModuleDict()
+#             # (A) Residual stacks at resolution = Ri
+#             resnet_list = nn.ModuleList()
+#             for _ in range(num_res_blocks):
+#                 resnet_list.append(
+#                     ResidualBlock(
+#                         channels      = curr_channels,
+#                         size          = Ri,
+#                         cutoff_den    = cutoff_den,
+#                         conv_kernel   = conv_kernel,
+#                         filter_size   = filter_size,
+#                         lrelu_upsampling = 2,
+#                         half_width_mult  = half_width_mult,
+#                         radial           = False,
+#                         batch_norm       = True,
+#                         activation       = activation
+#                     )
+#                 )
+#             level_modules["resnets"] = resnet_list
+#             # (B) Attention if desired at Ri
+#             if Ri in self.attn_resolutions:
+#                 level_modules["attn"] = nn.ModuleList(
+#                     [make_attn(curr_channels, "vanilla") for _ in range(num_res_blocks)]
+#                 )
+#             else:
+#                 level_modules["attn"] = nn.ModuleList()
+#             # (C) Downsample filter (unless final level)
+#             if i_level < self.num_resolutions - 1:
+#                 out_ch = ch * ch_mult[i_level + 1]
+#                 level_modules["downsample"] = CNOBlock(
+#                     in_channels      = curr_channels,
+#                     out_channels     = out_ch,
+#                     in_size          = Ri,
+#                     out_size         = Rnext,
+#                     cutoff_den       = cutoff_den,
+#                     conv_kernel      = conv_kernel,
+#                     filter_size      = filter_size,
+#                     lrelu_upsampling = 2,   # Because CNOBlock detects in_size>out_size → do downsample internally
+#                     half_width_mult  = half_width_mult,
+#                     radial           = False,
+#                     batch_norm       = True,
+#                     activation       = activation
+#                 )
+#                 curr_channels = out_ch
+#             else:
+#                 level_modules["downsample"] = None
+
+#             self.down_blocks.append(level_modules)
+
+#         # === (3) Bottleneck (ResidualBlock + optional Attention + ResidualBlock) at bottom resolution ===
+#         Rbot = self.down_resolutions[-1]
+#         self.bot_res1 = ResidualBlock(
+#             channels      = curr_channels,
+#             size          = Rbot,
+#             cutoff_den    = cutoff_den,
+#             conv_kernel   = conv_kernel,
+#             filter_size   = filter_size,
+#             lrelu_upsampling = 2,
+#             half_width_mult  = half_width_mult,
+#             radial           = False,
+#             batch_norm       = True,
+#             activation       = activation
+#         )
+#         if Rbot in self.attn_resolutions:
+#             self.bot_attn = make_attn(curr_channels, "vanilla")
+#         else:
+#             self.bot_attn = None
+#         self.bot_res2 = ResidualBlock(
+#             channels      = curr_channels,
+#             size          = Rbot,
+#             cutoff_den    = cutoff_den,
+#             conv_kernel   = conv_kernel,
+#             filter_size   = filter_size,
+#             lrelu_upsampling = 2,
+#             half_width_mult  = half_width_mult,
+#             radial           = False,
+#             batch_norm       = True,
+#             activation       = activation
+#         )
+
+#         # === (4) Final µ/logσ conv_out ===
+#         out_ch = 2 * z_channels if double_z else z_channels
+#         self.conv_out = CNOBlock(
+#             in_channels      = curr_channels,
+#             out_channels     = out_ch,
+#             in_size          = Rbot,
+#             out_size         = Rbot,
+#             cutoff_den       = cutoff_den,
+#             conv_kernel      = conv_kernel,
+#             filter_size      = filter_size,
+#             lrelu_upsampling = 2,
+#             half_width_mult  = half_width_mult,
+#             radial           = False,
+#             batch_norm       = False,
+#             activation       = activation
+#         )
+
+#     def forward(self, x):
+#         # 1) Lift
+#         h = self.lift(x)  # → [B, ch*ch_mult[0], resolution, resolution]
+#         skip_channels = []
+#         # 2) Downsampling path
+#         for i_level, modules in enumerate(self.down_blocks):
+#             Ri = self.down_resolutions[i_level]
+#             # (A) Residual stacks at Ri
+#             for i_block, resnet in enumerate(modules["resnets"]):
+#                 h = resnet(h)
+#                 if modules["attn"] and i_block < len(modules["attn"]):
+#                     h = modules["attn"][i_block](h)
+#             # (B) Downsample if not last
+#             if modules["downsample"] is not None:
+#                 h = modules["downsample"](h)
+#             skip_channels.append(h)
+
+#         # 3) Bottleneck
+#         h = self.bot_res1(h)
+#         if self.bot_attn is not None:
+#             h = self.bot_attn(h)
+#         h = self.bot_res2(h)
+
+#         # 4) µ / logσ head
+#         h = self.conv_out(h)
+#         return h  # shape = [B, 2*z_channels, Rbot, Rbot]
+
+# class Decoder(nn.Module):
+#     def __init__(self,
+#                  *,
+#                  ch,                   # base feature‐map width (e.g. 64)
+#                  out_ch,               # final image channels (e.g. 1 or 3)
+#                  ch_mult=(1, 2, 4, 8),
+#                  num_res_blocks=2,
+#                  attn_resolutions=(16, 8),
+#                  resolution=128,
+#                  z_channels,           # latent depth (same as “in_channels” in signature)
+#                  use_linear_attn=False,
+#                  attn_type="vanilla",
+#                  cutoff_den=2.0001,
+#                  filter_size=6,
+#                  half_width_mult=0.8,
+#                  conv_kernel=3,
+#                  activation="cno_lrelu",
+#                  tanh_out=False,
+#                  **ignore_kwargs):
+#         super().__init__()
+
+#         # ——— Store constructor arguments ———
+#         self.ch               = ch
+#         self.out_ch           = out_ch
+#         self.ch_mult          = ch_mult
+#         self.num_res_blocks   = num_res_blocks
+#         self.attn_resolutions = set(attn_resolutions)
+#         self.resolution       = resolution
+#         self.z_channels       = z_channels
+#         self.cutoff_den       = cutoff_den
+#         self.filter_size      = filter_size
+#         self.half_width_mult  = half_width_mult
+#         self.conv_kernel      = conv_kernel
+#         self.activation       = activation
+#         self.tanh_out         = tanh_out
+
+#         self.num_resolutions = len(ch_mult)
+
+#         # Precompute the spatial sizes at each “down” level so that we can reverse for “up”:
+#         #    down_resolutions = [resolution, resolution/2, resolution/4, ..., bottom]
+#         self.down_resolutions = [
+#             resolution // (2 ** i) for i in range(self.num_resolutions)
+#         ]
+#         # Reverse that for the up‐path:
+#         self.up_resolutions = list(reversed(self.down_resolutions))
+#         # e.g. if resolution=128 and num_resolutions=4, then down_resolutions=[128,64,32,16]
+#         # and up_resolutions=[16,32,64,128].
+
+#         # Channel count at each level = base_ch × multiplier
+#         # e.g. if ch=64 and ch_mult=(1,2,4,8), then [64,128,256,512].
+#         self.ch_in_level = [ch * m for m in ch_mult]
+
+#         #
+#         # 1) “conv_in”: map z → feature maps at the bottom resolution, but still do
+#         #    a 2× “oversample→LReLU→downsample” during activation (no spatial change).
+#         #
+#         Rbot = self.down_resolutions[-1]          # bottom resolution (e.g. 16)
+#         bottom_ch = ch * ch_mult[-1]              # e.g. 512
+#         self.conv_in = CNOBlock(
+#             in_channels      = self.z_channels,   # latent depth
+#             out_channels     = bottom_ch,         # 512
+#             in_size          = Rbot,              # 16
+#             out_size         = Rbot,              # still 16 (no up/down)
+#             cutoff_den       = cutoff_den,
+#             conv_kernel      = conv_kernel,
+#             filter_size      = filter_size,
+#             lrelu_upsampling = 2,                 # ← always oversample→filter→downsample
+#             half_width_mult  = half_width_mult,
+#             radial           = False,
+#             batch_norm       = False,
+#             activation       = activation          # “cno_lrelu”
+#         )
+#         curr_channels = bottom_ch                # 512
+#         curr_res      = Rbot                      # 16
+
+#         #
+#         # 2) Bottleneck: two ResidualBlocks (no change in spatial size) + optional attention
+#         #    Each ResidualBlock uses lrelu_upsampling=2 so that its activation also low-pass filters.
+#         #
+#         self.bot_res1 = ResidualBlock(
+#             channels         = curr_channels,      # 512
+#             size             = curr_res,           # 16
+#             cutoff_den       = cutoff_den,
+#             conv_kernel      = conv_kernel,
+#             filter_size      = filter_size,
+#             lrelu_upsampling = 2,                  # ← oversample→filter→downsample inside Residual
+#             half_width_mult  = half_width_mult,
+#             radial           = False,
+#             batch_norm       = True,
+#             activation       = activation
+#         )
+#         if curr_res in self.attn_resolutions:
+#             atype = "linear" if use_linear_attn else attn_type
+#             self.bot_attn = make_attn(curr_channels, attn_type=atype)
+#         else:
+#             self.bot_attn = None
+
+#         self.bot_res2 = ResidualBlock(
+#             channels         = curr_channels,
+#             size             = curr_res,
+#             cutoff_den       = cutoff_den,
+#             conv_kernel      = conv_kernel,
+#             filter_size      = filter_size,
+#             lrelu_upsampling = 2,                  # ← oversample→filter→downsample
+#             half_width_mult  = half_width_mult,
+#             radial           = False,
+#             batch_norm       = True,
+#             activation       = activation
+#         )
+
+#         #
+#         # 3) Upsampling path: for each level i_level = (num_resolutions-1) … 0,
+#         #    we do (num_res_blocks+1) ResidualBlocks at current Res=Ri (all with lrelu_upsampling=2),
+#         #    then a CNOBlock that goes (Ri → 2Ri) by setting in_size=Ri, out_size=2Ri, lrelu_upsampling=2.
+#         #
+#         self.up_blocks = nn.ModuleList()
+#         for idx, i_level in enumerate(reversed(range(self.num_resolutions))):
+#             # i_level runs: 3, 2, 1, 0 if num_resolutions=4
+#             # idx=0 → i_level=3, Ri = up_resolutions[0] = bottom_res (16)
+#             # idx=1 → i_level=2, Ri = up_resolutions[1] = 32
+#             # idx=2 → i_level=1, Ri = up_resolutions[2] = 64
+#             # idx=3 → i_level=0, Ri = up_resolutions[3] = 128
+#             Ri    = self.up_resolutions[idx]
+#             Rnext = (
+#                 self.up_resolutions[idx + 1]
+#                 if idx < self.num_resolutions - 1
+#                 else Ri
+#             )
+#             out_ch_i = ch * ch_mult[i_level]
+#             # e.g. at i_level=3, out_ch_i=ch*8=512; at i_level=2, out_ch_i=ch*4=256; etc.
+
+#             level_modules = nn.ModuleDict()
+
+#             # (A) Residual stacks at resolution Ri, each with lrelu_upsampling=2
+#             resnet_list = nn.ModuleList()
+#             attn_list   = nn.ModuleList()
+#             for _ in range(self.num_res_blocks + 1):
+#                 resnet_list.append(
+#                     ResidualBlock(
+#                         channels         = curr_channels,
+#                         size             = curr_res,
+#                         cutoff_den       = cutoff_den,
+#                         conv_kernel      = conv_kernel,
+#                         filter_size      = filter_size,
+#                         lrelu_upsampling = 2,       # ← oversample→filter→downsample
+#                         half_width_mult  = half_width_mult,
+#                         radial           = False,
+#                         batch_norm       = True,
+#                         activation       = activation
+#                     )
+#                 )
+#                 if curr_res in self.attn_resolutions:
+#                     atype = "linear" if use_linear_attn else attn_type
+#                     attn_list.append(make_attn(curr_channels, attn_type=atype))
+
+#             level_modules["resnets"] = resnet_list
+#             level_modules["attn"]    = attn_list
+
+#             # (B) Upsample block: only if i_level != 0 do we upsample spatially
+#             if i_level != 0:
+#                 # in_size=Ri, out_size=Rnext=2*Ri, lrelu_upsampling=2
+#                 level_modules["upsample"] = CNOBlock(
+#                     in_channels      = curr_channels,  # e.g. 512 at 16×16
+#                     out_channels     = out_ch_i,       # e.g. 256 at next level
+#                     in_size          = curr_res,       # Ri (e.g. 16)
+#                     out_size         = Rnext,          # Rnext (e.g. 32)
+#                     cutoff_den       = cutoff_den,
+#                     conv_kernel      = conv_kernel,
+#                     filter_size      = filter_size,
+#                     lrelu_upsampling = 2,              # ← perform a 2× upsample inside LReLU
+#                     half_width_mult  = half_width_mult,
+#                     radial           = False,
+#                     batch_norm       = True,
+#                     activation       = activation
+#                 )
+#                 curr_res      = Rnext         # e.g. 32
+#                 curr_channels = out_ch_i      # e.g. 256
+#             else:
+#                 # i_level == 0 → we’re at the very last block; we do NOT change spatial size again.
+#                 # So we keep in_size=curr_res=128, out_size=128, but still use lrelu_upsampling=2
+#                 level_modules["upsample"] = CNOBlock(
+#                     in_channels      = curr_channels,  # e.g. 64
+#                     out_channels     = out_ch_i,       # e.g. 64 (no channel change if ch_mult[0]=1)
+#                     in_size          = curr_res,       # 128
+#                     out_size         = Rnext,          # also 128
+#                     cutoff_den       = cutoff_den,
+#                     conv_kernel      = conv_kernel,
+#                     filter_size      = filter_size,
+#                     lrelu_upsampling = 2,              # ← still oversample→filter→downsample
+#                     half_width_mult  = half_width_mult,
+#                     radial           = False,
+#                     batch_norm       = True,
+#                     activation       = activation
+#                 )
+#                 curr_res      = Rnext         # still 128
+#                 curr_channels = out_ch_i      # e.g. 64
+
+#             self.up_blocks.append(level_modules)
+
+#         #
+#         # 4) Final conv_out: map curr_channels → out_ch, keep spatial size = resolution,
+#         #    and apply an oversample→filter→downsample inside LReLU as well.
+#         #
+#         self.conv_out = CNOBlock(
+#             in_channels      = curr_channels,  # e.g. 64
+#             out_channels     = out_ch,         # final image channels
+#             in_size          = curr_res,       # should equal `resolution`
+#             out_size         = curr_res,       # keep same
+#             cutoff_den       = cutoff_den,
+#             conv_kernel      = conv_kernel,
+#             filter_size      = filter_size,
+#             lrelu_upsampling = 2,              # ← oversample→filter→downsample
+#             half_width_mult  = half_width_mult,
+#             radial           = False,
+#             batch_norm       = False,          # typically no BN on final output
+#             activation       = activation         # or `"cno_lrelu"` if you want an extra filtered LReLU
+#         )
+
+#     def forward(self, z):
+#         # z: [B, z_channels, Rbot, Rbot]
+#         h = self.conv_in(z)      # → [B, bottom_ch, Rbot, Rbot]
+#         h = self.bot_res1(h)
+#         if self.bot_attn is not None:
+#             h = self.bot_attn(h)
+#         h = self.bot_res2(h)
+
+#         for modules in self.up_blocks:
+#             # (A) apply each ResidualBlock + possible attention
+#             for idx, block in enumerate(modules["resnets"]):
+#                 h = block(h)
+#                 if modules["attn"] and idx < len(modules["attn"]):
+#                     h = modules["attn"][idx](h)
+#             # (B) apply the “upsample” CNOBlock (which might either double spatial size
+#             #     or just do a filtered channel‐adjust if we’re already at the top)
+#             h = modules["upsample"](h)
+
+#         h = self.conv_out(h)     # → [B, out_ch, resolution, resolution]
+#         if self.tanh_out:
+#             h = torch.tanh(h)
+#         return h
 
 class SimpleDecoder(nn.Module):
     def __init__(self, in_channels, out_channels, *args, **kwargs):
