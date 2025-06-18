@@ -10,17 +10,17 @@ import numpy as np
 
 # Configs
 project_name = 'GenPhy-with-reconstruction-loss-with-trained-vae'
-directory = 'fukkqyk1'
-model_name = 'epoch=1499-step=337500.ckpt'
+directory = 'o0st0m9q'
+model_name = 'epoch=1445-step=325350.ckpt'
 resume_path = f'/work/cvlab/students/bhagavan/SemesterProject/ControlNet/{project_name}/{directory}/checkpoints/{model_name}'
-batch_size = 50
+batch_size = 100
 sd_locked = True
 only_mid_control = False
 
-res = 256
+res = 128
 latent_dim = res // 8
-dataset_name = 'harmonics'
-train_or_test = 'train'
+dataset_name = 'combined'
+train_or_test = 'test'
 
 # First use cpu to load models. Pytorch Lightning will automatically move it to GPUs.
 model = create_model('./models/cldm_v21.yaml').cuda()
