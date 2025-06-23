@@ -11,8 +11,8 @@ import torch.nn.functional as F
 
 # --- Initialize wandb and log config ---
 wandb.init(
-    project="vae-training",
-    dir="./vae-training",
+    project="vae-training-stacked",
+    dir="./vae-training-stacked",
     config={
         "batch_size": 8,
         "learning_rate": 1e-4,
@@ -20,12 +20,12 @@ wandb.init(
         "kl_beta": 0.0,
         "epochs": 500,
         "save_every": 100,
-        "lpips_weight": 0.5,
+        "lpips_weight": 0.0,
         "sobel_weight": 0.5,
         "model": "AutoencoderKL",
-        "notes": "Training AE with pretrained weights with linear decay LR schedule",
+        "notes": "Training AE with pretrained weights with linear decay LR schedule for stacked fields and mask",
         "z_channels": 4,
-        "resolution": 256,
+        "resolution": 128,
         "dataset_name": "harmonics",
         "ch": 128,
         "ch_mult": [1, 2, 4, 4],
@@ -62,6 +62,39 @@ embed_dim = config.z_channels
 vae = AutoencoderKL(ddconfig, lossconfig, embed_dim)
 vae.load_state_dict(vae_state_dict, strict=True)
 vae = vae.cuda()
+
+old_conv = vae.encoder.conv_in
+new_conv = nn.Conv2d(
+    in_channels=4,
+    out_channels=old_conv.out_channels,
+    kernel_size=old_conv.kernel_size,
+    stride=old_conv.stride,
+    padding=old_conv.padding,
+    bias=(old_conv.bias is not None)
+).cuda()
+with torch.no_grad():
+    new_conv.weight[:, :3, :, :] = old_conv.weight
+    new_conv.weight[:, 3, :, :] = old_conv.weight.mean(dim=1)
+    if old_conv.bias is not None:
+        new_conv.bias = old_conv.bias
+vae.encoder.conv_in = new_conv
+
+old_conv_out = vae.decoder.conv_out
+new_conv_out = nn.Conv2d(
+    in_channels=old_conv_out.in_channels,
+    out_channels=4,
+    kernel_size=old_conv_out.kernel_size,
+    stride=old_conv_out.stride,
+    padding=old_conv_out.padding,
+    bias=(old_conv_out.bias is not None)
+).cuda()
+with torch.no_grad():
+    new_conv_out.weight[:3, :, :, :] = old_conv_out.weight
+    new_conv_out.weight[3, :, :, :] = old_conv_out.weight.mean(dim=0)
+    if old_conv_out.bias is not None:
+        new_conv_out.bias[:3] = old_conv_out.bias
+        new_conv_out.bias[3] = old_conv_out.bias.mean()
+vae.decoder.conv_out = new_conv_out
 
 total_params = sum(p.numel() for p in vae.parameters())
 trainable_params = sum(p.numel() for p in vae.parameters() if p.requires_grad)
@@ -132,11 +165,11 @@ for epoch in range(config.epochs):
         recon = vae.decode(z)
 
         recon_loss = loss_fn(recon, images)
-        perceptual_loss = lpips_loss(recon, images).mean()
+        # perceptual_loss = lpips_loss(recon, images).mean()
         # kl_loss = -0.5 * torch.mean(torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1))
         sobel_loss = sobel_gradient_loss(images, recon)
 
-        loss = recon_loss + config.lpips_weight*perceptual_loss + config.sobel_weight*sobel_loss
+        loss = recon_loss + config.sobel_weight*sobel_loss
         loss.backward()
         optimizer.step()
 
@@ -147,7 +180,7 @@ for epoch in range(config.epochs):
         wandb.log({
             "step": num_batches + 1,
             "recon_loss": recon_loss.item(),
-            "perceptual_loss": perceptual_loss.item(),
+            # "perceptual_loss": perceptual_loss.item(),
             # "kl_loss": kl_loss.item(),
             "sobel_loss": sobel_loss.item(),
             "total_loss": loss.item(),

@@ -8,8 +8,8 @@ import numpy as np
 
 # --- Config ---
 
-run_name = 'run-20250614_102955-a7g4fc3i'
-directory = f'/work/cvlab/students/bhagavan/SemesterProject/vae/ControlNet/vae-training/wandb/{run_name}/files'
+run_name = 'run-20250618_151518-tivmkdgz'
+directory = f'/work/cvlab/students/bhagavan/SemesterProject/vae/ControlNet/vae-training-stacked/wandb/{run_name}/files'
 ckpt_path = f'{directory}/vae_epoch_500.pt'
 
 batch_size = 16
@@ -17,7 +17,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 train_or_test = 'test'
 
 # --- Dataset ---
-res = 256
+res = 128
 dataset_name = 'harmonics'
 dataset = MyDataset(train_or_test, res=res, dataset_name=dataset_name)
 dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4)
@@ -27,8 +27,8 @@ ddconfig = {
     'double_z': True,
     'z_channels': 4,
     'resolution': 128,
-    'in_channels': 3,
-    'out_ch': 3,
+    'in_channels': 4,
+    'out_ch': 4,
     'ch': 128,
     'ch_mult': [1, 2, 4, 4],
     'num_res_blocks': 2,
