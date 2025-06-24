@@ -1,6 +1,6 @@
 from share import *
 from torch.utils.data import DataLoader
-from dataset import MyDataset
+from SemesterProject.ControlNet.dataset_unconditional import MyDataset
 from cldm.model import create_model, load_state_dict
 import torch
 from cldm.ddim_hacked import DDIMSampler
