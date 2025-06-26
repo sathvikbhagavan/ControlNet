@@ -1,19 +1,20 @@
 from share import *
 from torch.utils.data import DataLoader
-from SemesterProject.ControlNet.dataset_unconditional import MyDataset
+from dataset_unconditional import MyDataset
 from cldm.model import create_model, load_state_dict
 import torch
 from cldm.ddim_hacked import DDIMSampler
 from pytorch_lightning import seed_everything
 from einops import rearrange
 import numpy as np
+import cldm.ddim_hacked as ddim_hacked
 
 # Configs
 project_name = 'GenPhy-with-reconstruction-loss-with-trained-vae-stacked'
 directory = 't7t2d0sj'
 model_name = 'epoch=1499-step=337500.ckpt'
 resume_path = f'/work/cvlab/students/bhagavan/SemesterProject/ControlNet/{project_name}/{directory}/checkpoints/{model_name}'
-batch_size = 100
+batch_size = 1
 sd_locked = True
 only_mid_control = False
 
@@ -33,6 +34,37 @@ dataset = MyDataset(train_or_test, res, dataset_name)
 dataloader = DataLoader(dataset, num_workers=4, batch_size=batch_size, shuffle=False)
 model.eval()
 
+X = next(iter(dataloader))
+control = rearrange(X['hint'].to(torch.float32), 'b h w c -> b c h w').cuda()
+prompt = X['txt']
+cond = {"c_concat": [control], "c_crossattn": [model.get_learned_conditioning(prompt)]}
+shape = (4, latent_dim, latent_dim)
+ddim_steps = 50
+num_samples = batch_size
+samples, intermediates = ddim_sampler.sample(ddim_steps, num_samples, shape, cond, verbose=True, guiding_image=X['jpg'][0, :, :, 3].float().unsqueeze(0).cuda())
+
+x_samples = model.decode_first_stage(samples)
+x_samples = (rearrange(x_samples, 'b c h w -> b h w c')).detach().cpu().numpy()
+
+def denormalize_from_minus_one_one(normalized_arr, min_val, max_val):
+    # Reshape min and max to broadcast properly: (1, 1, 1, C)
+    min_val = rearrange(min_val, '1 c 1 1 -> 1 1 1 c')
+    max_val = rearrange(max_val, '1 c 1 1 -> 1 1 1 c')
+    # First 3 channels: min-max denorm
+    denorm_rgb = (normalized_arr[:, :, :, :3] + 1) * (max_val[:, :, :, :3] - min_val[:, :, :, :3]) / 2 + min_val[:, :, :, :3]
+    # 4th channel: multiply by 255
+    denorm_hint = normalized_arr[:, :, :, 3:4] * 255.0
+    # Concatenate along channel axis
+    return np.concatenate([denorm_rgb, denorm_hint], axis=-1)
+
+min_val = np.load(f"/work/cvlab/students/bhagavan/SemesterProject/LDC_NS_2D/{res}x{res}/processed/{dataset_name}_lid_driven_cavity_Y_train_min_stats.npy")
+max_val = np.load(f"/work/cvlab/students/bhagavan/SemesterProject/LDC_NS_2D/{res}x{res}/processed/{dataset_name}_lid_driven_cavity_Y_train_max_stats.npy")
+
+x_samples = denormalize_from_minus_one_one(x_samples, min_val, max_val)
+
+np.save('samples.npy', x_samples)
+np.save('mask.npy', X['jpg'][0, :, :, 3])
+
 x_samples_list = []
 reynolds_numbers = []
 # output_image_list = []
@@ -47,7 +79,7 @@ for X in dataloader:
         shape = (4, latent_dim, latent_dim)
         ddim_steps = 50
         num_samples = batch_size
-        samples, intermediates = ddim_sampler.sample(ddim_steps, num_samples, shape, cond, verbose=True)
+        samples, intermediates = ddim_sampler.sample(ddim_steps, num_samples, shape, cond, verbose=True, guiding_image=X['jpg'][0, :, :, 3])
         x_samples = model.decode_first_stage(samples)
         x_samples = (rearrange(x_samples, 'b c h w -> b h w c')).cpu().numpy()
         x_samples_list.append(x_samples)

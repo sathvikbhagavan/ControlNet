@@ -64,8 +64,8 @@ model:
           double_z: true
           z_channels: 4
           resolution: 256
-          in_channels: 3
-          out_ch: 3
+          in_channels: 4
+          out_ch: 4
           ch: 128
           ch_mult:
           - 1
