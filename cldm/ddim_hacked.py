@@ -75,6 +75,7 @@ class DDIMSampler(object):
                unconditional_conditioning=None, # this has to come in the same format as the conditioning, # e.g. as encoded tokens, ...
                dynamic_threshold=None,
                ucg_schedule=None,
+               guiding_image=None,
                **kwargs
                ):
         if conditioning is not None:
@@ -115,7 +116,8 @@ class DDIMSampler(object):
                                                     unconditional_guidance_scale=unconditional_guidance_scale,
                                                     unconditional_conditioning=unconditional_conditioning,
                                                     dynamic_threshold=dynamic_threshold,
-                                                    ucg_schedule=ucg_schedule
+                                                    ucg_schedule=ucg_schedule,
+                                                    guiding_image=guiding_image
                                                     )
         return samples, intermediates
 
@@ -126,7 +128,7 @@ class DDIMSampler(object):
                       mask=None, x0=None, img_callback=None, log_every_t=100,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
                       unconditional_guidance_scale=1., unconditional_conditioning=None, dynamic_threshold=None,
-                      ucg_schedule=None):
+                      ucg_schedule=None, guiding_image=None):
         device = self.model.betas.device
         b = shape[0]
         if x_T is None:
@@ -145,11 +147,29 @@ class DDIMSampler(object):
         total_steps = timesteps if ddim_use_original_steps else timesteps.shape[0]
         print(f"Running DDIM Sampling with {total_steps} timesteps")
 
-        iterator = tqdm(time_range, desc='DDIM Sampler', total=total_steps)
-
-        for i, step in enumerate(iterator):
+        # iterator = tqdm(time_range, desc='DDIM Sampler', total=total_steps)
+        i = 0
+        num_replace_steps = 2
+        T = 20
+        recurrent = [T]*num_replace_steps
+        noisy_guiding_images = []
+        replaced_images = []
+        print(timesteps)
+        while i < len(time_range):
+        # for i, step in enumerate(iterator):
+            step = time_range[i]
             index = total_steps - i - 1
             ts = torch.full((b,), step, device=device, dtype=torch.long)
+            if index < num_replace_steps:
+                # Replace the mask with the `guiding_image` if provided
+                if guiding_image is not None:
+                    print(f'Replacing image at {i}th timestep')
+                    guiding_image_noisy = self.model.q_sample(guiding_image, ts)
+                    noisy_guiding_images.append(guiding_image_noisy.cpu().numpy())
+                    original_image = self.model.decode_first_stage(img)
+                    original_image[:, 3, :, :] = guiding_image_noisy[0].clone()
+                    replaced_images.append(original_image.cpu().numpy())
+                    img = self.model.encode_first_stage(original_image).mean
 
             if mask is not None:
                 assert x0 is not None
@@ -168,14 +188,44 @@ class DDIMSampler(object):
                                       unconditional_conditioning=unconditional_conditioning,
                                       dynamic_threshold=dynamic_threshold)
             img, pred_x0 = outs
+            if index < num_replace_steps:
+                if recurrent[index] > 0:
+                    recurrent[index] -= 1
+                    with torch.no_grad():
+                        print(f'At {i}th timestep, going to {i-1}th timestep')
+                        img = self.q_sample_one_step(img, ts)
+                        i -= 1
             if callback: callback(i)
             if img_callback: img_callback(pred_x0, i)
 
             if index % log_every_t == 0 or index == total_steps - 1:
                 intermediates['x_inter'].append(img)
                 intermediates['pred_x0'].append(pred_x0)
-
+            i += 1
+        noisy_guiding_images = np.concatenate(noisy_guiding_images, axis=0)
+        replaced_images = np.concatenate(replaced_images, axis=0)
+        np.save("noisy_guiding_images.npy", noisy_guiding_images)
+        np.save("replaced_images.npy", replaced_images)
         return img, intermediates
+    
+    def extract(self, a, t, x_shape):
+        b, *_ = t.shape
+        out = a.gather(-1, t)
+        return out.reshape(b, *((1,) * (len(x_shape) - 1)))
+    
+    def q_sample(self, x_start, t, noise=None):
+        noise = torch.randn_like(x_start)
+        return self.extract(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start + \
+               self.extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
+        
+    def q_sample_one_step(self, x_prev, t):
+        beta_t = self.extract(self.betas, t, x_prev.shape)
+        alpha_t = 1.0 - beta_t
+        sqrt_alpha_t = torch.sqrt(alpha_t)
+        sqrt_beta_t = torch.sqrt(beta_t)
+        noise = torch.randn_like(x_prev)
+        x_t = sqrt_alpha_t * x_prev + sqrt_beta_t * noise
+        return x_t
 
     @torch.no_grad()
     def p_sample_ddim(self, x, c, t, index, repeat_noise=False, use_original_steps=False, quantize_denoised=False,
@@ -315,3 +365,4 @@ class DDIMSampler(object):
                                           unconditional_conditioning=unconditional_conditioning)
             if callback: callback(i)
         return x_dec
+
