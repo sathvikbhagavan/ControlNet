@@ -23,7 +23,7 @@ wandb.init(
         "lpips_weight": 0.0,
         "sobel_weight": 0.5,
         "model": "AutoencoderKL",
-        "notes": "Training AE with pretrained weights with linear decay LR schedule for stacked fields and mask",
+        "notes": "Training AE with pretrained weights with linear decay LR schedule for stacked fields and SDF",
         "z_channels": 4,
         "resolution": 128,
         "dataset_name": "harmonics",

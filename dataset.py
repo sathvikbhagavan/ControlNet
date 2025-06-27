@@ -18,8 +18,7 @@ class MyDataset(Dataset):
     def __getitem__(self, idx):
         reynolds_number = self.X[idx, 0, 0, 0]
         prompt = f'{reynolds_number}'
-        hint = 255.0 - self.X[idx, 2:3, :, :]  # shape: (1, H, W)
-        hint = hint.astype(np.float32) / 255.0  # Normalize
+        hint = self.X[idx, 1:2, :, :].astype(np.float32)  # shape: (1, H, W)
         hint = rearrange(hint, 'c h w -> h w c')  # shape: (H, W, 1)
         y_img = rearrange(self.Y[idx, 0:3, :, :], 'c h w -> h w c')  # shape: (H, W, 3)
         jpg = np.concatenate([y_img, hint], axis=-1)
