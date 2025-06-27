@@ -61,9 +61,10 @@ min_val = np.load(f"/work/cvlab/students/bhagavan/SemesterProject/LDC_NS_2D/{res
 max_val = np.load(f"/work/cvlab/students/bhagavan/SemesterProject/LDC_NS_2D/{res}x{res}/processed/{dataset_name}_lid_driven_cavity_Y_train_max_stats.npy")
 
 x_samples = denormalize_from_minus_one_one(x_samples, min_val, max_val)
+mask_denormalized = denormalize_from_minus_one_one(X['jpg'].numpy(), min_val, max_val)
 
 np.save('samples.npy', x_samples)
-np.save('mask.npy', X['jpg'][0, :, :, 3])
+np.save('mask.npy', mask_denormalized)
 
 x_samples_list = []
 reynolds_numbers = []

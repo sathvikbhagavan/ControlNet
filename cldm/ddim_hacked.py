@@ -165,25 +165,30 @@ class DDIMSampler(object):
             print(f'Time range: {time_range[j+num_steps_without_backprop:]}')
             print(f'Length of time range: {len(time_range[j+num_steps_without_backprop:])}')
             iterator = tqdm(time_range[j+num_steps_without_backprop:], desc='DDIM Sampler', total=len(time_range[j+num_steps_without_backprop:]))
-            img = img_with_grad
-            for i, step in enumerate(iterator):
-                index = total_steps - i - 1
-                ts = torch.full((b,), step, device=device, dtype=torch.long)
-                outs = self.p_sample_ddim(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
-                                        quantize_denoised=quantize_denoised, temperature=temperature,
-                                        noise_dropout=noise_dropout, score_corrector=score_corrector,
-                                        corrector_kwargs=corrector_kwargs,
-                                        unconditional_guidance_scale=unconditional_guidance_scale,
-                                        unconditional_conditioning=unconditional_conditioning,
-                                        dynamic_threshold=dynamic_threshold)
-                img, _ = outs
-            if guiding_image is not None:
-                decoded_img = self.model.decode_first_stage(img)
-                loss = F.mse_loss(decoded_img[:, 3, :, :], guiding_image)
-                loss.backward()
-                # print(img_with_grad.grad)
-                print(img_with_grad.grad.shape)
-                img = img - img_with_grad.grad
+            N = 1
+            loss = 0
+            for _ in range(N):
+                img = img_with_grad
+                for i, step in enumerate(iterator):
+                    index = total_steps - i - 1
+                    ts = torch.full((b,), step, device=device, dtype=torch.long)
+                    outs = self.p_sample_ddim(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
+                                            quantize_denoised=quantize_denoised, temperature=temperature,
+                                            noise_dropout=noise_dropout, score_corrector=score_corrector,
+                                            corrector_kwargs=corrector_kwargs,
+                                            unconditional_guidance_scale=unconditional_guidance_scale,
+                                            unconditional_conditioning=unconditional_conditioning,
+                                            dynamic_threshold=dynamic_threshold)
+                    img, _ = outs
+                if guiding_image is not None:
+                    decoded_img = self.model.decode_first_stage(img)
+                    loss += F.mse_loss(decoded_img[:, 3, :, :], guiding_image)
+            loss = loss / N
+            loss.backward()
+            print(img_with_grad.grad.shape)
+            print(torch.linalg.norm(img_with_grad.grad))
+            img = img - img_with_grad.grad
+            img_with_grad.grad.zero_()
 
         return img, intermediates
 
