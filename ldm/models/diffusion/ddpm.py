@@ -927,7 +927,7 @@ class LatentDiffusion(DDPM):
                 x_noisy - sqrt_one_minus_alpha_cumprod_t * model_output
             ) / sqrt_alpha_cumprod_t
             recons = rearrange(self.decode_first_stage(pred_x0), 'b c h w -> b h w c')
-            channel_weights = torch.tensor([1.0, 1.0, 5.0, 1.0], device=recons.device)
+            channel_weights = torch.tensor([1.0, 1.0, 5.0], device=recons.device)
             squared_error = (x_true - recons) ** 2
             per_channel_mse = squared_error.mean(dim=(0, 1, 2))
             reconstruction_loss = (per_channel_mse * channel_weights).sum()

@@ -27,7 +27,7 @@ class MyDatasetUnconditional(Dataset):
         # hint = cv2.cvtColor(hint, cv2.COLOR_GRAY2RGB)
         # hint = hint.astype(np.float32) / 255.0  # Normalize
         # Copy three channels from the hint
-        hint = np.repeat(hint, 3, axis=2) / 255.0  # shape: (H, W, 3)
+        hint = np.repeat(hint, 3, axis=2)  # shape: (H, W, 3)
         jpg = self.X[idx, :, :, 0:3]  # shape: (H, W, 3)
         return dict(jpg=jpg, txt=prompt, hint=hint)
 

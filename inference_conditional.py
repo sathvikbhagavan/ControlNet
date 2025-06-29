@@ -10,7 +10,7 @@ import numpy as np
 
 # Configs
 project_name = 'GenPhy-with-reconstruction-loss-with-trained-vae'
-directory = 'fukkqyk1'
+directory = 'ta8tgt2x'
 model_name = 'epoch=1499-step=337500.ckpt'
 resume_path = f'/work/cvlab/students/bhagavan/SemesterProject/ControlNet/{project_name}/{directory}/checkpoints/{model_name}'
 batch_size = 100
@@ -19,7 +19,7 @@ only_mid_control = False
 
 res = 128
 latent_dim = res // 8
-dataset_name = 'skelneton'
+dataset_name = 'harmonics'
 train_or_test = 'train'
 
 # First use cpu to load models. Pytorch Lightning will automatically move it to GPUs.

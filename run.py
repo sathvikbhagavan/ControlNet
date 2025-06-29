@@ -13,8 +13,8 @@ ddconfig = {
     'double_z': True,
     'z_channels': 4,
     'resolution': 128,
-    'in_channels': 4,
-    'out_ch': 4,
+    'in_channels': 3,
+    'out_ch': 3,
     'ch': 128,
     'ch_mult': [1, 2, 4, 4],
     'num_res_blocks': 2,
@@ -25,11 +25,11 @@ lossconfig = {'target': 'torch.nn.Identity'}
 embed_dim = ddconfig['z_channels']
 
 # Load trained weights
-ckpt_path = '/work/cvlab/students/bhagavan/SemesterProject/vae/ControlNet/vae-training-stacked/wandb/run-20250618_151518-tivmkdgz/files/vae_epoch_500.pt'
+ckpt_path = '/work/cvlab/students/bhagavan/SemesterProject/vae/ControlNet/vae-training/wandb/run-20250603_081629-b263llqe/files/vae_epoch_500.pt'
 vae = AutoencoderKL(ddconfig, lossconfig, embed_dim).cuda()
 vae.load_state_dict(torch.load(ckpt_path, map_location='cuda'), strict=True)
 vae.eval()
-wandb_logger = WandbLogger(project="GenPhy-with-reconstruction-loss-with-trained-vae-stacked")
+wandb_logger = WandbLogger(project="GenPhy-with-reconstruction-loss-with-trained-vae")
 
 # Configs
 resume_path = '/work/cvlab/students/bhagavan/SemesterProject/ControlNet/control_sd21_ini.ckpt'

@@ -14,4 +14,4 @@ echo "Python binary: $(which python)"
 echo "Python version: $(python --version)"
 
 # Run the script
-srun python3 inference.py
+srun python3 inference_with_conditional.py

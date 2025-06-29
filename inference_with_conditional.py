@@ -1,6 +1,6 @@
 from share import *
 from torch.utils.data import DataLoader
-from SemesterProject.ControlNet.dataset_with_uncoditional_pred import MyDatasetUnconditional
+from dataset_with_uncoditional_pred import MyDatasetUnconditional
 from cldm.model import create_model, load_state_dict
 import torch
 from cldm.ddim_hacked import DDIMSampler
@@ -10,9 +10,9 @@ import numpy as np
 
 # Configs
 project_name = 'GenPhy-with-reconstruction-loss-with-trained-vae-stacked'
-directory = 't7t2d0sj'
+directory = 'dxh9v0g1'
 model_name = 'epoch=1499-step=337500.ckpt'
-resume_path = '/work/cvlab/students/bhagavan/SemesterProject/ControlNet/GenPhy-with-reconstruction-loss-with-trained-vae/fukkqyk1/checkpoints/epoch=1499-step=337500.ckpt'
+resume_path = '/work/cvlab/students/bhagavan/SemesterProject/ControlNet/GenPhy-with-reconstruction-loss-with-trained-vae/ta8tgt2x/checkpoints/epoch=1499-step=337500.ckpt'
 batch_size = 100
 sd_locked = True
 only_mid_control = False
@@ -66,4 +66,4 @@ max_val = np.load(f"/work/cvlab/students/bhagavan/SemesterProject/LDC_NS_2D/{res
 x_samples_all = denormalize_from_minus_one_one(x_samples_all, min_val, max_val)
 
 np.save(f"/work/cvlab/students/bhagavan/SemesterProject/ControlNet/{project_name}/{directory}/{res}_{dataset_name}_preds_{train_or_test}_conditional.npy", x_samples_all)
-np.save(f"/work/cvlab/students/bhagavan/SemesterProject/ControlNet/{project_name}/{directory}/{res}_{dataset_name}_masks_{train_or_test}_conditional.npy", masks_list_all)
+np.save(f"/work/cvlab/students/bhagavan/SemesterProject/ControlNet/{project_name}/{directory}/{res}_{dataset_name}_sdf_{train_or_test}_conditional.npy", masks_list_all)

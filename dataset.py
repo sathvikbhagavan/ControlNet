@@ -18,7 +18,7 @@ class MyDataset(Dataset):
     def __getitem__(self, idx):
         reynolds_number = self.X[idx, 0, 0, 0]
         prompt = f'{reynolds_number}'
-        hint = 255.0 - rearrange(self.X[idx, 2:3, :, :], 'c h w -> h w c')
-        hint = hint.astype(np.uint8)
-        hint = cv2.cvtColor(hint, cv2.COLOR_GRAY2RGB)
-        return dict(jpg=rearrange(self.Y[idx, 0:3, :, :], 'c h w -> h w c'), txt=prompt, hint=hint/255.0)
+        hint = self.X[idx, 1:2, :, :].astype(np.float32)  # shape: (1, H, W)
+        hint = rearrange(hint, 'c h w -> h w c')
+        hint = np.concatenate([hint] * 3, axis=-1)
+        return dict(jpg=rearrange(self.Y[idx, 0:3, :, :], 'c h w -> h w c'), txt=prompt, hint=hint)

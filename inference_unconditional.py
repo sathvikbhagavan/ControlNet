@@ -1,6 +1,6 @@
 from share import *
 from torch.utils.data import DataLoader
-from SemesterProject.ControlNet.dataset_unconditional import MyDataset
+from dataset_unconditional import MyDataset
 from cldm.model import create_model, load_state_dict
 import torch
 from cldm.ddim_hacked import DDIMSampler
@@ -10,7 +10,7 @@ import numpy as np
 
 # Configs
 project_name = 'GenPhy-with-reconstruction-loss-with-trained-vae-stacked'
-directory = 't7t2d0sj'
+directory = 'dxh9v0g1'
 model_name = 'epoch=1499-step=337500.ckpt'
 resume_path = f'/work/cvlab/students/bhagavan/SemesterProject/ControlNet/{project_name}/{directory}/checkpoints/{model_name}'
 batch_size = 100
@@ -67,10 +67,10 @@ def denormalize_from_minus_one_one(normalized_arr, min_val, max_val):
     denorm_rgb = (normalized_arr[:, :, :, :3] + 1) * (max_val[:, :, :, :3] - min_val[:, :, :, :3]) / 2 + min_val[:, :, :, :3]
 
     # 4th channel: multiply by 255
-    denorm_hint = normalized_arr[:, :, :, 3:4] * 255.0
+    # denorm_hint = normalized_arr[:, :, :, 3:4] * 255.0
 
     # Concatenate along channel axis
-    return np.concatenate([denorm_rgb, denorm_hint], axis=-1)
+    return np.concatenate([denorm_rgb, normalized_arr[:, :, :, 3:4]], axis=-1)
 
 min_val = np.load(f"/work/cvlab/students/bhagavan/SemesterProject/LDC_NS_2D/{res}x{res}/processed/{dataset_name}_lid_driven_cavity_Y_train_min_stats.npy")
 max_val = np.load(f"/work/cvlab/students/bhagavan/SemesterProject/LDC_NS_2D/{res}x{res}/processed/{dataset_name}_lid_driven_cavity_Y_train_max_stats.npy")
