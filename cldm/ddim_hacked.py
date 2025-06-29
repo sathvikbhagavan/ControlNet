@@ -147,29 +147,53 @@ class DDIMSampler(object):
         total_steps = timesteps if ddim_use_original_steps else timesteps.shape[0]
         print(f"Running DDIM Sampling with {total_steps} timesteps")
 
+        num_steps_without_backprop = 30
+        iterator = tqdm(time_range[:num_steps_without_backprop], desc='DDIM Sampler', total=len(time_range[:num_steps_without_backprop]))
+        for i, step in enumerate(iterator):
+                index = total_steps - i - 1
+                ts = torch.full((b,), step, device=device, dtype=torch.long)
+                outs = self.p_sample_ddim(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
+                                        quantize_denoised=quantize_denoised, temperature=temperature,
+                                        noise_dropout=noise_dropout, score_corrector=score_corrector,
+                                        corrector_kwargs=corrector_kwargs,
+                                        unconditional_guidance_scale=unconditional_guidance_scale,
+                                        unconditional_conditioning=unconditional_conditioning,
+                                        dynamic_threshold=dynamic_threshold)
+                img, _ = outs
+
         # iterator = tqdm(time_range, desc='DDIM Sampler', total=total_steps)
-        i = 0
-        num_replace_steps = 2
-        T = 20
+        i = 30
+        num_replace_steps = 20
+        T = 1
         recurrent = [T]*num_replace_steps
         noisy_guiding_images = []
         replaced_images = []
-        print(timesteps)
+        replaced_from = []
+        guiding_latent = self.model.encode_first_stage(guiding_image).mean if guiding_image is not None else None
         while i < len(time_range):
         # for i, step in enumerate(iterator):
             step = time_range[i]
             index = total_steps - i - 1
             ts = torch.full((b,), step, device=device, dtype=torch.long)
-            if index < num_replace_steps:
+            # if index < num_replace_steps:
                 # Replace the mask with the `guiding_image` if provided
-                if guiding_image is not None:
-                    print(f'Replacing image at {i}th timestep')
-                    guiding_image_noisy = self.model.q_sample(guiding_image, ts)
-                    noisy_guiding_images.append(guiding_image_noisy.cpu().numpy())
-                    original_image = self.model.decode_first_stage(img)
-                    original_image[:, 3, :, :] = guiding_image_noisy[0].clone()
-                    replaced_images.append(original_image.cpu().numpy())
-                    img = self.model.encode_first_stage(original_image).mean
+            if guiding_image is not None:
+                print(f'Replacing image at {i}th timestep')
+                guiding_latent_noisy = self.q_sample(guiding_latent, index)
+
+                # 2) take your current sample latent `img`, decode to pixels,
+                #    splice in the guide *decoded* from latent, then re‐encode:
+                original_image = self.model.decode_first_stage(img)
+                replaced_from.append(original_image.cpu().numpy())
+
+                # decode the noisy guide latent to pixels and splice
+                guide_noisy_pixels = self.model.decode_first_stage(guiding_latent_noisy)
+                noisy_guiding_images.append(guide_noisy_pixels.cpu().numpy())
+                original_image[:, 3, :, :] = guide_noisy_pixels[0, 3, :, :].clone()
+                replaced_images.append(original_image.cpu().numpy())
+
+                # finally re‐encode back to latent for the next sampling step
+                img = self.model.encode_first_stage(original_image).mean
 
             if mask is not None:
                 assert x0 is not None
@@ -188,13 +212,19 @@ class DDIMSampler(object):
                                       unconditional_conditioning=unconditional_conditioning,
                                       dynamic_threshold=dynamic_threshold)
             img, pred_x0 = outs
-            if index < num_replace_steps:
-                if recurrent[index] > 0:
-                    recurrent[index] -= 1
-                    with torch.no_grad():
-                        print(f'At {i}th timestep, going to {i-1}th timestep')
-                        img = self.q_sample_one_step(img, ts)
-                        i -= 1
+            # if index < num_replace_steps:
+            #     if recurrent[index] > 0:
+            #         recurrent[index] -= 1
+            #         with torch.no_grad():
+            #             print(f'At {i}th timestep, going to {i-1}th timestep')
+            #             img = self.q_sample_one_step(img, ts)
+            #             i -= 1
+            if recurrent[index] > 0:
+                recurrent[index] -= 1
+                with torch.no_grad():
+                    print(f'At {i}th timestep, going to {i-1}th timestep')
+                    img = self.q_sample_one_step(img, index)
+                    i -= 1
             if callback: callback(i)
             if img_callback: img_callback(pred_x0, i)
 
@@ -206,6 +236,7 @@ class DDIMSampler(object):
         replaced_images = np.concatenate(replaced_images, axis=0)
         np.save("noisy_guiding_images.npy", noisy_guiding_images)
         np.save("replaced_images.npy", replaced_images)
+        np.save("replaced_from.npy", replaced_from)
         return img, intermediates
     
     def extract(self, a, t, x_shape):
@@ -213,19 +244,36 @@ class DDIMSampler(object):
         out = a.gather(-1, t)
         return out.reshape(b, *((1,) * (len(x_shape) - 1)))
     
-    def q_sample(self, x_start, t, noise=None):
-        noise = torch.randn_like(x_start)
-        return self.extract(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start + \
-               self.extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
-        
-    def q_sample_one_step(self, x_prev, t):
-        beta_t = self.extract(self.betas, t, x_prev.shape)
-        alpha_t = 1.0 - beta_t
-        sqrt_alpha_t = torch.sqrt(alpha_t)
-        sqrt_beta_t = torch.sqrt(beta_t)
-        noise = torch.randn_like(x_prev)
-        x_t = sqrt_alpha_t * x_prev + sqrt_beta_t * noise
-        return x_t
+    def q_sample(self, x_start, index, noise=None):
+        """
+        Noising according to the *DDIM* schedule.
+        index      – integer index into your timesteps/DDIM schedule
+        α          – self.ddim_alphas[index]
+        σ          – self.ddim_sqrt_one_minus_alphas[index]
+        """
+        if noise is None:
+            noise = torch.randn_like(x_start)
+        # pull the scalar α and sqrt(1−α) for this step
+        a_t = self.ddim_alphas[index]
+        s_t = self.ddim_sqrt_one_minus_alphas[index]
+        # shape them to (b,1,1,1) so they broadcast
+        a_t = a_t.reshape(-1, *([1] * (x_start.ndim-1)))
+        s_t = s_t.reshape(-1, *([1] * (x_start.ndim-1)))
+        return a_t.sqrt() * x_start + s_t * noise
+
+    def q_sample_one_step(self, x_prev, index, noise=None):
+        """
+        A single‐step forward noising under the DDIM approximation:
+          x_t = sqrt(α_t) x_{t-1} + sqrt(1−α_t) ε
+        where α_t comes from your DDIM α’s.
+        """
+        if noise is None:
+            noise = torch.randn_like(x_prev)
+        a_t = self.ddim_alphas[index]
+        s_t = self.ddim_sqrt_one_minus_alphas[index]
+        a_t = a_t.reshape(-1, *([1] * (x_prev.ndim-1)))
+        s_t = s_t.reshape(-1, *([1] * (x_prev.ndim-1)))
+        return a_t.sqrt() * x_prev + s_t * noise
 
     @torch.no_grad()
     def p_sample_ddim(self, x, c, t, index, repeat_noise=False, use_original_steps=False, quantize_denoised=False,
