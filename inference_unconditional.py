@@ -11,7 +11,7 @@ import cldm.ddim_hacked as ddim_hacked
 
 # Configs
 project_name = 'GenPhy-with-reconstruction-loss-with-trained-vae-stacked'
-directory = 't7t2d0sj'
+directory = 'dxh9v0g1'
 model_name = 'epoch=1499-step=337500.ckpt'
 resume_path = f'/work/cvlab/students/bhagavan/SemesterProject/ControlNet/{project_name}/{directory}/checkpoints/{model_name}'
 batch_size = 1
@@ -39,7 +39,7 @@ control = rearrange(X['hint'].to(torch.float32), 'b h w c -> b c h w').cuda()
 prompt = X['txt']
 cond = {"c_concat": [control], "c_crossattn": [model.get_learned_conditioning(prompt)]}
 shape = (4, latent_dim, latent_dim)
-ddim_steps = 50
+ddim_steps = 60
 num_samples = batch_size
 samples, intermediates = ddim_sampler.sample(ddim_steps, num_samples, shape, cond, verbose=True, guiding_image=X['jpg'][0, :, :, 3].float().unsqueeze(0).cuda())
 
@@ -53,18 +53,18 @@ def denormalize_from_minus_one_one(normalized_arr, min_val, max_val):
     # First 3 channels: min-max denorm
     denorm_rgb = (normalized_arr[:, :, :, :3] + 1) * (max_val[:, :, :, :3] - min_val[:, :, :, :3]) / 2 + min_val[:, :, :, :3]
     # 4th channel: multiply by 255
-    denorm_hint = normalized_arr[:, :, :, 3:4] * 255.0
+    # denorm_hint = normalized_arr[:, :, :, 3:4] * 255.0
     # Concatenate along channel axis
-    return np.concatenate([denorm_rgb, denorm_hint], axis=-1)
+    return np.concatenate([denorm_rgb, normalized_arr[:, :, :, 3:4]], axis=-1)
 
 min_val = np.load(f"/work/cvlab/students/bhagavan/SemesterProject/LDC_NS_2D/{res}x{res}/processed/{dataset_name}_lid_driven_cavity_Y_train_min_stats.npy")
 max_val = np.load(f"/work/cvlab/students/bhagavan/SemesterProject/LDC_NS_2D/{res}x{res}/processed/{dataset_name}_lid_driven_cavity_Y_train_max_stats.npy")
 
 x_samples = denormalize_from_minus_one_one(x_samples, min_val, max_val)
-mask_denormalized = denormalize_from_minus_one_one(X['jpg'].numpy(), min_val, max_val)
+gt = denormalize_from_minus_one_one(X['jpg'].numpy(), min_val, max_val)
 
 np.save('samples.npy', x_samples)
-np.save('mask.npy', mask_denormalized)
+np.save('gt.npy', gt)
 
 x_samples_list = []
 reynolds_numbers = []

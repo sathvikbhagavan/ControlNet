@@ -146,7 +146,7 @@ class DDIMSampler(object):
         time_range = list(reversed(range(0,timesteps))) if ddim_use_original_steps else np.flip(timesteps)
         total_steps = timesteps if ddim_use_original_steps else timesteps.shape[0]
         print(f"Running DDIM Sampling with {total_steps} timesteps")
-        num_steps_without_backprop = 40
+        num_steps_without_backprop = 50
         iterator = tqdm(time_range[:num_steps_without_backprop], desc='DDIM Sampler', total=len(time_range[:num_steps_without_backprop]))
         for i, step in enumerate(iterator):
                 index = total_steps - i - 1
@@ -168,20 +168,19 @@ class DDIMSampler(object):
             N = 1
             loss = 0
             for _ in range(N):
-                img = img_with_grad
                 for i, step in enumerate(iterator):
                     index = total_steps - i - 1
                     ts = torch.full((b,), step, device=device, dtype=torch.long)
-                    outs = self.p_sample_ddim(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
+                    outs = self.p_sample_ddim(img_with_grad, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
                                             quantize_denoised=quantize_denoised, temperature=temperature,
                                             noise_dropout=noise_dropout, score_corrector=score_corrector,
                                             corrector_kwargs=corrector_kwargs,
                                             unconditional_guidance_scale=unconditional_guidance_scale,
                                             unconditional_conditioning=unconditional_conditioning,
                                             dynamic_threshold=dynamic_threshold)
-                    img, _ = outs
+                    # img, _ = outs
                 if guiding_image is not None:
-                    decoded_img = self.model.decode_first_stage(img)
+                    decoded_img = self.model.decode_first_stage(outs[0])
                     loss += F.mse_loss(decoded_img[:, 3, :, :], guiding_image)
             loss = loss / N
             loss.backward()
