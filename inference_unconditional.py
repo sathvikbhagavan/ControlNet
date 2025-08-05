@@ -34,86 +34,94 @@ dataset = MyDataset(train_or_test, res, dataset_name)
 dataloader = DataLoader(dataset, num_workers=4, batch_size=batch_size, shuffle=False)
 model.eval()
 
-X = next(iter(dataloader))
+iter_dataloader = iter(dataloader)
+X = next(iter_dataloader)
+X = next(iter_dataloader)
 control = rearrange(X['hint'].to(torch.float32), 'b h w c -> b c h w').cuda()
 prompt = X['txt']
 cond = {"c_concat": [control], "c_crossattn": [model.get_learned_conditioning(prompt)]}
 shape = (4, latent_dim, latent_dim)
-ddim_steps = 60
+ddim_steps = 50
 num_samples = batch_size
-samples, intermediates = ddim_sampler.sample(ddim_steps, num_samples, shape, cond, verbose=True, guiding_image=X['jpg'][0, :, :, 3].float().unsqueeze(0).cuda())
+x_samples_list = []
 
-x_samples = model.decode_first_stage(samples)
-x_samples = (rearrange(x_samples, 'b c h w -> b h w c')).detach().cpu().numpy()
+num_steps_without_backprop = 40
+R = 0
+B = 0
+N = 10
+lr = 1e-3
+for _ in range(1):
+    samples, intermediates = ddim_sampler.sample(ddim_steps, num_samples, shape, cond, verbose=True, guiding_image=X['jpg'][0, :, :, 3].float().unsqueeze(0).cuda(),
+                                                 num_steps_without_backprop=num_steps_without_backprop, R=R, B=B, N=N, lr=lr)
+    x_samples = model.decode_first_stage(samples)
+    x_samples = (rearrange(x_samples, 'b c h w -> b h w c')).detach().cpu().numpy()
+    x_samples_list.append(x_samples)
 
 def denormalize_from_minus_one_one(normalized_arr, min_val, max_val):
-    # Reshape min and max to broadcast properly: (1, 1, 1, C)
     min_val = rearrange(min_val, '1 c 1 1 -> 1 1 1 c')
     max_val = rearrange(max_val, '1 c 1 1 -> 1 1 1 c')
-    # First 3 channels: min-max denorm
     denorm_rgb = (normalized_arr[:, :, :, :3] + 1) * (max_val[:, :, :, :3] - min_val[:, :, :, :3]) / 2 + min_val[:, :, :, :3]
-    # 4th channel: multiply by 255
-    # denorm_hint = normalized_arr[:, :, :, 3:4] * 255.0
-    # Concatenate along channel axis
     return np.concatenate([denorm_rgb, normalized_arr[:, :, :, 3:4]], axis=-1)
 
 min_val = np.load(f"/work/cvlab/students/bhagavan/SemesterProject/LDC_NS_2D/{res}x{res}/processed/{dataset_name}_lid_driven_cavity_Y_train_min_stats.npy")
 max_val = np.load(f"/work/cvlab/students/bhagavan/SemesterProject/LDC_NS_2D/{res}x{res}/processed/{dataset_name}_lid_driven_cavity_Y_train_max_stats.npy")
 
-x_samples = denormalize_from_minus_one_one(x_samples, min_val, max_val)
+x_samples_all = np.concatenate(x_samples_list, axis=0)
+x_samples_all = denormalize_from_minus_one_one(x_samples_all, min_val, max_val)
 gt = denormalize_from_minus_one_one(X['jpg'].numpy(), min_val, max_val)
 
-np.save('samples.npy', x_samples)
+np.save('samples_unconditional.npy', x_samples_all)
 np.save('gt.npy', gt)
 
-x_samples_list = []
-reynolds_numbers = []
-# output_image_list = []
-for X in dataloader:
-    # output_image = X['jpg']
-    control = rearrange(X['hint'].to(torch.float32), 'b h w c -> b c h w').cuda()
-    prompt = X['txt']
-    with torch.no_grad():
-        seed = 42
-        seed_everything(seed)
-        cond = {"c_concat": [control], "c_crossattn": [model.get_learned_conditioning(prompt)]}
-        shape = (4, latent_dim, latent_dim)
-        ddim_steps = 50
-        num_samples = batch_size
-        samples, intermediates = ddim_sampler.sample(ddim_steps, num_samples, shape, cond, verbose=True, guiding_image=X['jpg'][0, :, :, 3])
-        x_samples = model.decode_first_stage(samples)
-        x_samples = (rearrange(x_samples, 'b c h w -> b h w c')).cpu().numpy()
-        x_samples_list.append(x_samples)
-        reynolds_numbers.append(X['txt'])
-        # output_image_list.append(output_image.cpu().numpy())
 
-print(f"Reynolds numbers: {reynolds_numbers}")
-x_samples_all = np.concatenate(x_samples_list, axis=0)
-# output_image_all = np.concatenate(output_image_list, axis=0)
+# x_samples_list = []
+# reynolds_numbers = []
+# # output_image_list = []
+# for X in dataloader:
+#     # output_image = X['jpg']
+#     control = rearrange(X['hint'].to(torch.float32), 'b h w c -> b c h w').cuda()
+#     prompt = X['txt']
+#     with torch.no_grad():
+#         seed = 42
+#         seed_everything(seed)
+#         cond = {"c_concat": [control], "c_crossattn": [model.get_learned_conditioning(prompt)]}
+#         shape = (4, latent_dim, latent_dim)
+#         ddim_steps = 50
+#         num_samples = batch_size
+#         samples, intermediates = ddim_sampler.sample(ddim_steps, num_samples, shape, cond, verbose=True, guiding_image=X['jpg'][0, :, :, 3])
+#         x_samples = model.decode_first_stage(samples)
+#         x_samples = (rearrange(x_samples, 'b c h w -> b h w c')).cpu().numpy()
+#         x_samples_list.append(x_samples)
+#         reynolds_numbers.append(X['txt'])
+#         # output_image_list.append(output_image.cpu().numpy())
 
-def denormalize_from_minus_one_one(normalized_arr, min_val, max_val):
-    # Reshape min and max to broadcast properly: (1, 1, 1, C)
-    min_val = rearrange(min_val, '1 c 1 1 -> 1 1 1 c')
-    max_val = rearrange(max_val, '1 c 1 1 -> 1 1 1 c')
+# print(f"Reynolds numbers: {reynolds_numbers}")
+# x_samples_all = np.concatenate(x_samples_list, axis=0)
+# # output_image_all = np.concatenate(output_image_list, axis=0)
 
-    # First 3 channels: min-max denorm
-    denorm_rgb = (normalized_arr[:, :, :, :3] + 1) * (max_val[:, :, :, :3] - min_val[:, :, :, :3]) / 2 + min_val[:, :, :, :3]
+# def denormalize_from_minus_one_one(normalized_arr, min_val, max_val):
+#     # Reshape min and max to broadcast properly: (1, 1, 1, C)
+#     min_val = rearrange(min_val, '1 c 1 1 -> 1 1 1 c')
+#     max_val = rearrange(max_val, '1 c 1 1 -> 1 1 1 c')
 
-    # 4th channel: multiply by 255
-    denorm_hint = normalized_arr[:, :, :, 3:4] * 255.0
+#     # First 3 channels: min-max denorm
+#     denorm_rgb = (normalized_arr[:, :, :, :3] + 1) * (max_val[:, :, :, :3] - min_val[:, :, :, :3]) / 2 + min_val[:, :, :, :3]
 
-    # Concatenate along channel axis
-    return np.concatenate([denorm_rgb, denorm_hint], axis=-1)
+#     # 4th channel: multiply by 255
+#     denorm_hint = normalized_arr[:, :, :, 3:4] * 255.0
 
-min_val = np.load(f"/work/cvlab/students/bhagavan/SemesterProject/LDC_NS_2D/{res}x{res}/processed/{dataset_name}_lid_driven_cavity_Y_train_min_stats.npy")
-max_val = np.load(f"/work/cvlab/students/bhagavan/SemesterProject/LDC_NS_2D/{res}x{res}/processed/{dataset_name}_lid_driven_cavity_Y_train_max_stats.npy")
+#     # Concatenate along channel axis
+#     return np.concatenate([denorm_rgb, denorm_hint], axis=-1)
 
-x_samples_all = denormalize_from_minus_one_one(x_samples_all, min_val, max_val)
-# output_image_all = denormalize_from_minus_one_one(output_image_all, min_val, max_val)
-# Save the Reynolds numbers as a text file
-with open(f"/work/cvlab/students/bhagavan/SemesterProject/ControlNet/{project_name}/{directory}/{res}_{dataset_name}_reynolds_numbers_{train_or_test}.txt", 'w') as f:
-    for reynolds_number in reynolds_numbers[0]:
-        f.write(f"{reynolds_number}\n")  # Assuming reynolds_number is a list of strings
-# np.save(f"/work/cvlab/students/bhagavan/SemesterProject/ControlNet/{project_name}/{directory}/{res}_{dataset_name}_gt_{train_or_test}.npy", output_image_all)
+# min_val = np.load(f"/work/cvlab/students/bhagavan/SemesterProject/LDC_NS_2D/{res}x{res}/processed/{dataset_name}_lid_driven_cavity_Y_train_min_stats.npy")
+# max_val = np.load(f"/work/cvlab/students/bhagavan/SemesterProject/LDC_NS_2D/{res}x{res}/processed/{dataset_name}_lid_driven_cavity_Y_train_max_stats.npy")
 
-np.save(f"/work/cvlab/students/bhagavan/SemesterProject/ControlNet/{project_name}/{directory}/{res}_{dataset_name}_preds_{train_or_test}.npy", x_samples_all)
+# x_samples_all = denormalize_from_minus_one_one(x_samples_all, min_val, max_val)
+# # output_image_all = denormalize_from_minus_one_one(output_image_all, min_val, max_val)
+# # Save the Reynolds numbers as a text file
+# with open(f"/work/cvlab/students/bhagavan/SemesterProject/ControlNet/{project_name}/{directory}/{res}_{dataset_name}_reynolds_numbers_{train_or_test}.txt", 'w') as f:
+#     for reynolds_number in reynolds_numbers[0]:
+#         f.write(f"{reynolds_number}\n")  # Assuming reynolds_number is a list of strings
+# # np.save(f"/work/cvlab/students/bhagavan/SemesterProject/ControlNet/{project_name}/{directory}/{res}_{dataset_name}_gt_{train_or_test}.npy", output_image_all)
+
+# np.save(f"/work/cvlab/students/bhagavan/SemesterProject/ControlNet/{project_name}/{directory}/{res}_{dataset_name}_preds_{train_or_test}.npy", x_samples_all)

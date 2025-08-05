@@ -76,6 +76,7 @@ class DDIMSampler(object):
                dynamic_threshold=None,
                ucg_schedule=None,
                guiding_image=None,
+               num_steps_without_backprop=None, R=None, B=None, N=None, lr=None,
                **kwargs
                ):
         if conditioning is not None:
@@ -117,18 +118,76 @@ class DDIMSampler(object):
                                                     unconditional_conditioning=unconditional_conditioning,
                                                     dynamic_threshold=dynamic_threshold,
                                                     ucg_schedule=ucg_schedule,
-                                                    guiding_image=guiding_image
+                                                    guiding_image=guiding_image,
+                                                    num_steps_without_backprop=num_steps_without_backprop,
+                                                    R=R,
+                                                    B=B,
+                                                    N=N,
+                                                    lr=lr
                                                     )
         return samples, intermediates
 
     # @torch.no_grad()
+    # def ddim_sampling(self, cond, shape,
+    #                   x_T=None, ddim_use_original_steps=False,
+    #                   callback=None, timesteps=None, quantize_denoised=False,
+    #                   mask=None, x0=None, img_callback=None, log_every_t=100,
+    #                   temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
+    #                   unconditional_guidance_scale=1., unconditional_conditioning=None, dynamic_threshold=None,
+    #                   ucg_schedule=None, guiding_image=None):
+    #     device = self.model.betas.device
+    #     b = shape[0]
+    #     if x_T is None:
+    #         img = torch.randn(shape, device=device)
+    #     else:
+    #         img = x_T
+
+    #     if timesteps is None:
+    #         timesteps = self.ddpm_num_timesteps if ddim_use_original_steps else self.ddim_timesteps
+    #     elif timesteps is not None and not ddim_use_original_steps:
+    #         subset_end = int(min(timesteps / self.ddim_timesteps.shape[0], 1) * self.ddim_timesteps.shape[0]) - 1
+    #         timesteps = self.ddim_timesteps[:subset_end]
+
+    #     intermediates = {'x_inter': [img], 'pred_x0': [img]}
+    #     time_range = list(reversed(range(0,timesteps))) if ddim_use_original_steps else np.flip(timesteps)
+    #     total_steps = timesteps if ddim_use_original_steps else timesteps.shape[0]
+    #     print(f"Running DDIM Sampling with {total_steps} timesteps")
+    #     num_steps_without_backprop = 50
+    #     iterator = tqdm(time_range[:num_steps_without_backprop], desc='DDIM Sampler', total=len(time_range[:num_steps_without_backprop]))
+    #     for i, step in enumerate(iterator):
+    #         index = total_steps - i - 1
+    #         # print(f'Index: {index}')
+    #         ts = torch.full((b,), step, device=device, dtype=torch.long)
+    #         outs = self.p_sample_ddim(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
+    #                                 quantize_denoised=quantize_denoised, temperature=temperature,
+    #                                 noise_dropout=noise_dropout, score_corrector=score_corrector,
+    #                                 corrector_kwargs=corrector_kwargs,
+    #                                 unconditional_guidance_scale=unconditional_guidance_scale,
+    #                                 unconditional_conditioning=unconditional_conditioning,
+    #                                 dynamic_threshold=dynamic_threshold)
+    #         img, _ = outs
+    #     iterator = tqdm(time_range[num_steps_without_backprop:], desc='DDIM Sampler', total=len(time_range[num_steps_without_backprop:]))
+    #     for i, step in enumerate(iterator):
+    #         index = total_steps - i - 40 - 1
+    #         print(f'Index: {index}')
+    #         ts = torch.full((b,), step, device=device, dtype=torch.long)
+    #         outs = self.p_sample_ddim(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
+    #                                 quantize_denoised=quantize_denoised, temperature=temperature,
+    #                                 noise_dropout=noise_dropout, score_corrector=score_corrector,
+    #                                 corrector_kwargs=corrector_kwargs,
+    #                                 unconditional_guidance_scale=unconditional_guidance_scale,
+    #                                 unconditional_conditioning=unconditional_conditioning,
+    #                                 dynamic_threshold=dynamic_threshold)
+    #         img, _ = outs
+    #     return img, intermediates
+
     def ddim_sampling(self, cond, shape,
                       x_T=None, ddim_use_original_steps=False,
                       callback=None, timesteps=None, quantize_denoised=False,
                       mask=None, x0=None, img_callback=None, log_every_t=100,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
                       unconditional_guidance_scale=1., unconditional_conditioning=None, dynamic_threshold=None,
-                      ucg_schedule=None, guiding_image=None):
+                      ucg_schedule=None, guiding_image=None, num_steps_without_backprop=40, R=2, B=0, N=3, lr=10000.0):
         device = self.model.betas.device
         b = shape[0]
         if x_T is None:
@@ -146,50 +205,78 @@ class DDIMSampler(object):
         time_range = list(reversed(range(0,timesteps))) if ddim_use_original_steps else np.flip(timesteps)
         total_steps = timesteps if ddim_use_original_steps else timesteps.shape[0]
         print(f"Running DDIM Sampling with {total_steps} timesteps")
-        num_steps_without_backprop = 50
         iterator = tqdm(time_range[:num_steps_without_backprop], desc='DDIM Sampler', total=len(time_range[:num_steps_without_backprop]))
         for i, step in enumerate(iterator):
-                index = total_steps - i - 1
-                ts = torch.full((b,), step, device=device, dtype=torch.long)
-                outs = self.p_sample_ddim(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
-                                        quantize_denoised=quantize_denoised, temperature=temperature,
-                                        noise_dropout=noise_dropout, score_corrector=score_corrector,
-                                        corrector_kwargs=corrector_kwargs,
-                                        unconditional_guidance_scale=unconditional_guidance_scale,
-                                        unconditional_conditioning=unconditional_conditioning,
-                                        dynamic_threshold=dynamic_threshold)
-                img, _ = outs
-        
-        for j in range(total_steps-num_steps_without_backprop):
-            img_with_grad = img.clone().detach().requires_grad_(True)
-            print(f'Time range: {time_range[j+num_steps_without_backprop:]}')
-            print(f'Length of time range: {len(time_range[j+num_steps_without_backprop:])}')
-            iterator = tqdm(time_range[j+num_steps_without_backprop:], desc='DDIM Sampler', total=len(time_range[j+num_steps_without_backprop:]))
-            N = 1
-            loss = 0
-            for _ in range(N):
-                for i, step in enumerate(iterator):
-                    index = total_steps - i - 1
-                    ts = torch.full((b,), step, device=device, dtype=torch.long)
-                    outs = self.p_sample_ddim(img_with_grad, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
-                                            quantize_denoised=quantize_denoised, temperature=temperature,
-                                            noise_dropout=noise_dropout, score_corrector=score_corrector,
-                                            corrector_kwargs=corrector_kwargs,
-                                            unconditional_guidance_scale=unconditional_guidance_scale,
-                                            unconditional_conditioning=unconditional_conditioning,
-                                            dynamic_threshold=dynamic_threshold)
-                    # img, _ = outs
-                if guiding_image is not None:
-                    decoded_img = self.model.decode_first_stage(outs[0])
-                    loss += F.mse_loss(decoded_img[:, 3, :, :], guiding_image)
-            loss = loss / N
-            loss.backward()
-            print(img_with_grad.grad.shape)
-            print(torch.linalg.norm(img_with_grad.grad))
-            img = img - img_with_grad.grad
-            img_with_grad.grad.zero_()
+            index = total_steps - i - 1
+            ts = torch.full((b,), step, device=device, dtype=torch.long)
+            outs = self.p_sample_ddim(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
+                                    quantize_denoised=quantize_denoised, temperature=temperature,
+                                    noise_dropout=noise_dropout, score_corrector=score_corrector,
+                                    corrector_kwargs=corrector_kwargs,
+                                    unconditional_guidance_scale=unconditional_guidance_scale,
+                                    unconditional_conditioning=unconditional_conditioning,
+                                    dynamic_threshold=dynamic_threshold)
+            img, _ = outs
 
-        return img, intermediates
+        recurrent = [0] * (total_steps-num_steps_without_backprop)
+        for i in range(total_steps-num_steps_without_backprop):
+            recurrent[i] = R
+        j = 0
+        img_with_grad = img.clone().detach().requires_grad_(True)
+        optimizer = torch.optim.AdamW([img_with_grad], lr=lr)
+        with torch.enable_grad():
+            while j < total_steps-num_steps_without_backprop:
+                print(f'Time range: {time_range[j+num_steps_without_backprop:]}')
+                print(f'Length of time range: {len(time_range[j+num_steps_without_backprop:])}')
+                loss = 0.0
+                for _ in range(N):
+                    iterator = tqdm(time_range[j+num_steps_without_backprop:], desc='DDIM Sampler', total=len(time_range[j+num_steps_without_backprop:]))
+                    x = img_with_grad
+                    for i, step in enumerate(iterator):
+                        index = total_steps - i - num_steps_without_backprop - j - 1
+                        ts = torch.full((b,), step, device=device, dtype=torch.long)
+                        outs = self.p_sample_ddim(x, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
+                                                quantize_denoised=quantize_denoised, temperature=temperature,
+                                                noise_dropout=noise_dropout, score_corrector=score_corrector,
+                                                corrector_kwargs=corrector_kwargs,
+                                                unconditional_guidance_scale=unconditional_guidance_scale,
+                                                unconditional_conditioning=unconditional_conditioning,
+                                                dynamic_threshold=dynamic_threshold)
+                        x, _ = outs
+                    decoded_img = self.model.decode_first_stage(x)
+                    loss += F.smooth_l1_loss(decoded_img[:, 3, :, :], guiding_image)
+                loss = loss / N
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                # with torch.no_grad():
+                #     updated = img_with_grad - lr*img_with_grad.grad
+                img_with_grad = img_with_grad.detach().requires_grad_(True)
+                img_with_grad.grad = None
+                if recurrent[j] != 0 :
+                    recurrent[j] -= 1
+                    for _ in range(B):
+                        with torch.enable_grad():
+                            img_with_grad = self.q_sample_one_step(img_with_grad, total_steps - num_steps_without_backprop - j - 1)
+                        img_with_grad = img_with_grad.detach().requires_grad_(True)
+                        img_with_grad.grad = None
+                        j -= 1
+                j += 1
+        return img_with_grad.detach(), intermediates
+
+    def q_sample_one_step(self, x_prev, index, noise=None):
+        """
+        A single‐step forward noising under the DDIM approximation:
+          x_t = sqrt(α_t) x_{t-1} + sqrt(1−α_t) ε
+        where α_t comes from your DDIM α’s.
+        """
+        if noise is None:
+            noise = torch.randn_like(x_prev)
+        a_t = self.ddim_alphas[index]
+        s_t = self.ddim_sqrt_one_minus_alphas[index]
+        a_t = a_t.reshape(-1, *([1] * (x_prev.ndim-1)))
+        s_t = s_t.reshape(-1, *([1] * (x_prev.ndim-1)))
+        return a_t.sqrt() * x_prev + s_t * noise
 
     # @torch.no_grad()
     def p_sample_ddim(self, x, c, t, index, repeat_noise=False, use_original_steps=False, quantize_denoised=False,
